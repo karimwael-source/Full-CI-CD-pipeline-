@@ -1,25 +1,9 @@
-"""
-check_threshold.py - The Gatekeeper Script.
-
-This script runs in the DEPLOY job. It:
-  1. Reads the Run ID from model_info.txt
-  2. Connects to MLflow and fetches the accuracy for that run
-  3. Compares it against the threshold (0.85)
-  4. If accuracy < 0.85 → exits with code 1 (FAILS the pipeline)
-  5. If accuracy >= 0.85 → exits with code 0 (pipeline continues)
-
-When a script exits with code 1, GitHub Actions marks the step
-as FAILED and stops the job. This is how we "block" bad models.
-"""
-
 import sys
 import mlflow
 
 THRESHOLD = 0.85  # Minimum acceptable accuracy
 
-# ─────────────────────────────────────────────
-# 1. Read the Run ID written by train.py
-# ─────────────────────────────────────────────
+# read the model information of evaluation 
 try:
     with open("model_info.txt", "r") as f:
         run_id = f.read().strip()
@@ -28,9 +12,7 @@ except FileNotFoundError:
     print("ERROR: model_info.txt not found. Did the validate job run?")
     sys.exit(1)
 
-# ─────────────────────────────────────────────
-# 2. Connect to MLflow and fetch the run's data
-# ─────────────────────────────────────────────
+#connecting to mlflow and fetching the run details using the run_id
 client = mlflow.tracking.MlflowClient()
 
 try:
@@ -39,9 +21,7 @@ except Exception as e:
     print(f"ERROR: Could not fetch run from MLflow. Details: {e}")
     sys.exit(1)
 
-# ─────────────────────────────────────────────
-# 3. Extract the accuracy metric
-# ─────────────────────────────────────────────
+# extracting the accuracy metrics from run data 
 accuracy = run.data.metrics.get("accuracy")
 
 if accuracy is None:
@@ -51,14 +31,18 @@ if accuracy is None:
 print(f"Model accuracy from MLflow: {accuracy:.4f}")
 print(f"Required threshold:         {THRESHOLD}")
 
-# ─────────────────────────────────────────────
-# 4. Make the decision
-# ─────────────────────────────────────────────
+# decide if the model's accuracy passed or not 
 if accuracy < THRESHOLD:
     print(f"FAILED: Accuracy {accuracy:.4f} is below threshold {THRESHOLD}.")
     print("Blocking deployment. The model is not good enough for production.")
-    sys.exit(1)  # Exit code 1 = FAILURE → GitHub Actions fails the step
+    sys.exit(1) # if model's accuracy does not pass 0.85 so it will be shown on github that the code exit with 1 
 else:
     print(f"PASSED: Accuracy {accuracy:.4f} meets the threshold {THRESHOLD}.")
     print("Model approved for deployment!")
     sys.exit(0)  # Exit code 0 = SUCCESS → pipeline continues
+
+    # if appears on github on runing the workflow that the code exit with 0 so it means the model's accuracy passed the threshold (0.85) 
+    # and the deployment will continue to be deployed to production environment.
+
+    # and if it appears on git hub on runing workflow that the code exit with 1 so that means the model's accuracy did not pass the threshold(0.85) 
+    # it is not allowed to be deployed for production environment.

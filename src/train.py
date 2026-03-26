@@ -1,13 +1,3 @@
-"""
-train.py - Trains a classifier and logs everything to MLflow.
-After training, it saves the Run ID to model_info.txt so the
-deploy job can find this exact run later.
-
-Model selection is controlled by MODEL_VARIANT env var:
-- strong (default): RandomForest, typically passes threshold
-- weak: DummyClassifier, typically fails threshold
-"""
-
 import os
 import mlflow
 import mlflow.sklearn
@@ -17,27 +7,18 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 
-# ─────────────────────────────────────────────
-# 1. Load Data
-#    In a real project, you'd load from data/
-#    We use Iris here for simplicity.
-# ─────────────────────────────────────────────
 print("Loading data...")
 X, y = load_iris(return_X_y=True)
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42
 )
 
-# ─────────────────────────────────────────────
-# 2. Train Model inside an MLflow Run
-#    mlflow.start_run() opens a "session" where
-#    everything we log gets saved together.
-# ─────────────────────────────────────────────
+# train the model and log parameters, metrics, and the model itself to MLflow
 print("Starting MLflow run...")
-mlflow.set_experiment("mlops-assignment")  # group runs under one experiment name
+mlflow.set_experiment("mlops-assignment") 
 
 with mlflow.start_run() as run:
-    # Save the Run ID — we need it in check_threshold.py
+    # Save the Run ID — we need it in check_threshold.py like if accuracy passed 0.85 or not to have the decision 
     run_id = run.info.run_id
     print(f"MLflow Run ID: {run_id}")
 
@@ -70,11 +51,7 @@ with mlflow.start_run() as run:
 
     print("Logged to MLflow successfully.")
 
-# ─────────────────────────────────────────────
-# 3. Export the Run ID to model_info.txt
-#    The deploy job will download this file and
-#    use the Run ID to query MLflow for accuracy.
-# ─────────────────────────────────────────────
+# export the run id like the model path to a file in order to check_threshold.py can read it and decide if the model passed the threshold or not
 with open("model_info.txt", "w") as f:
     f.write(run_id)
 
