@@ -1,0 +1,3 @@
+This folder holds the dataset tracked by DVC.
+The actual data files are NOT committed to Git.
+Run `dvc pull` to download them.

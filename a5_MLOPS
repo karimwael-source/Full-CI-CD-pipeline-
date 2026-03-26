@@ -1,0 +1,13 @@
+mlops-assignment/
+├── .github/
+│   └── workflows/
+│       └── pipeline.yml        ← The brain of CI/CD
+├── data/
+│   └── .gitkeep               ← Placeholder (real data tracked by DVC)
+├── src/
+│   └── train.py               ← Training script
+├── check_threshold.py         ← Accuracy gatekeeper
+├── Dockerfile                 ← Container blueprint
+├── requirements.txt           ← Python dependencies
+├── .dvc/                      ← Created automatically by DVC
+└── data.dvc                   ← DVC pointer file (created automatically)

@@ -1,0 +1,236 @@
+# ═══════════════════════════════════════════════════════════════════
+# .github/workflows/pipeline.yml
+# MLOps CI/CD Pipeline — DSAI 406 Assignment
+# ═══════════════════════════════════════════════════════════════════
+#
+# HOW TO READ THIS FILE:
+# GitHub Actions reads this top-to-bottom.
+# "name" labels things in the GitHub UI.
+# "on" says WHEN to run.
+# "jobs" says WHAT to do (in two stages here).
+# ═══════════════════════════════════════════════════════════════════
+
+name: MLOps CI/CD Pipeline
+
+# ───────────────────────────────────────────────────────────────────
+# TRIGGER: When does this pipeline run?
+#
+# push: branches: [main]  → run when you push directly to main
+# pull_request: branches: [main] → run when someone opens a PR to main
+#
+# Both triggers make sense: pushes for direct work, PRs for teamwork.
+# ───────────────────────────────────────────────────────────────────
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+
+# ═══════════════════════════════════════════════════════════════════
+#  JOB 1: VALIDATE
+#  This is the "Is the code and model safe?" job (CI part).
+#  It runs FIRST, independently.
+# ═══════════════════════════════════════════════════════════════════
+  validate:
+    name: "🔬 Validate — Train & Log to MLflow"
+    runs-on: ubuntu-latest
+    # ubuntu-latest = a fresh virtual machine (VM) that GitHub gives us
+    # for free. It starts blank every time — nothing is installed yet.
+
+    steps:
+
+      # ── STEP 1: Checkout ────────────────────────────────────────
+      # "actions/checkout@v4" is a pre-built action from GitHub.
+      # It downloads your repo's code onto the virtual machine.
+      # Without this, the VM has NO idea what your project is.
+      - name: "📥 Checkout repository"
+        uses: actions/checkout@v4
+
+      # ── STEP 2: Set up Python ───────────────────────────────────
+      # "actions/setup-python@v5" installs Python on the VM.
+      # We pin to 3.10 to match our Dockerfile — consistency matters.
+      - name: "🐍 Set up Python 3.10"
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'  # Cache pip packages to speed up future runs
+
+      # ── STEP 3: Install Dependencies ────────────────────────────
+      - name: "📦 Install dependencies"
+        run: pip install -r requirements.txt
+
+      # ── STEP 4: Configure DVC Remote ────────────────────────────
+      # DVC needs to know WHERE the remote storage is.
+      # We store the URL in a GitHub Secret (never hardcode credentials).
+      # ${{ secrets.DVC_REMOTE_URL }} reads the secret you set up.
+      #
+      # ⚠️ FOR THIS ASSIGNMENT: If you don't have remote DVC storage,
+      # you can SKIP this step and the next one, and just generate
+      # a small data file directly in the train.py script.
+      # The "|| true" at the end means "if this fails, it's OK"
+      # so the pipeline doesn't crash if DVC remote isn't configured.
+      - name: "🗂️ Configure DVC remote"
+        run: |
+          dvc remote add -d myremote ${{ secrets.DVC_REMOTE_URL }} || true
+        continue-on-error: true  # Don't fail the whole job if DVC isn't set up
+
+      # ── STEP 5: Pull Data with DVC ──────────────────────────────
+      # dvc pull downloads the actual data files that DVC is tracking.
+      # Without this, you'd only have the tiny .dvc pointer files, not
+      # the real 100MB dataset.
+      - name: "📊 Pull data with DVC"
+        run: dvc pull || echo "DVC pull skipped (no remote configured)"
+        continue-on-error: true  # Skip gracefully if no remote
+
+      # ── STEP 6: Train the Model ─────────────────────────────────
+      # This runs train.py, which:
+      #   - Trains the classifier
+      #   - Logs accuracy to MLflow
+      #   - Writes the Run ID to model_info.txt
+      #
+      # MLFLOW_TRACKING_URI is the address of your MLflow server.
+      # It's stored as a GitHub Secret — never put real URLs in YAML files.
+      # ${{ secrets.MLFLOW_TRACKING_URI }} pulls it securely at runtime.
+      - name: "🏋️ Train model and log to MLflow"
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+        run: python src/train.py
+
+      # ── STEP 7: Verify model_info.txt was created ───────────────
+      # A quick sanity check. If train.py crashed before writing the
+      # file, we want to know NOW rather than getting a confusing error
+      # in the deploy job.
+      - name: "✅ Verify model_info.txt exists"
+        run: |
+          if [ ! -f model_info.txt ]; then
+            echo "ERROR: model_info.txt was not created by train.py"
+            exit 1
+          fi
+          echo "model_info.txt contents:"
+          cat model_info.txt
+
+      # ── STEP 8: Upload Artifact ─────────────────────────────────
+      # THIS IS THE KEY STEP for passing data between jobs!
+      #
+      # Why do we need this?
+      # Each job runs on a SEPARATE virtual machine. When Job 1 finishes,
+      # its VM is deleted. Job 2 starts on a brand-new, empty VM.
+      # So model_info.txt would be LOST between jobs.
+      #
+      # "actions/upload-artifact@v4" saves the file to GitHub's servers
+      # so Job 2 can download it with "actions/download-artifact@v4".
+      #
+      # Think of it like emailing a document to yourself between meetings.
+      - name: "📤 Upload model_info.txt as artifact"
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-info          # The name you'll use to download it
+          path: model_info.txt      # The file to save
+          retention-days: 7         # Keep it for 7 days
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  JOB 2: DEPLOY
+#  This is the "Package and Ship" job (CD part).
+#  KEY: It only starts AFTER the validate job PASSES.
+# ═══════════════════════════════════════════════════════════════════
+  deploy:
+    name: "🚀 Deploy — Check Threshold & Build Docker"
+    runs-on: ubuntu-latest
+
+    # ── THE CRITICAL DEPENDENCY ──────────────────────────────────
+    # "needs: validate" means:
+    #   - Deploy will NOT start until validate finishes
+    #   - If validate FAILS, deploy is SKIPPED entirely
+    #
+    # Without this, both jobs run in parallel, and deploy might
+    # try to build a Docker image before training even finishes!
+    needs: validate
+
+    steps:
+
+      # ── STEP 1: Checkout ────────────────────────────────────────
+      # Remember: this is a brand-new VM. We need checkout again.
+      - name: "📥 Checkout repository"
+        uses: actions/checkout@v4
+
+      # ── STEP 2: Set up Python ───────────────────────────────────
+      - name: "🐍 Set up Python 3.10"
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      # ── STEP 3: Install Dependencies ────────────────────────────
+      - name: "📦 Install dependencies"
+        run: pip install -r requirements.txt
+
+      # ── STEP 4: Download the Artifact ───────────────────────────
+      # This retrieves model_info.txt that Job 1 uploaded.
+      # After this step, model_info.txt will exist on THIS VM.
+      - name: "📥 Download model_info.txt artifact"
+        uses: actions/download-artifact@v4
+        with:
+          name: model-info          # Must match the name used in upload
+
+      # ── STEP 5: Confirm the file arrived ────────────────────────
+      - name: "🔍 Show Run ID we received"
+        run: |
+          echo "Received model_info.txt:"
+          cat model_info.txt
+          echo "Run ID: $(cat model_info.txt)"
+
+      # ── STEP 6: Run the Threshold Check ─────────────────────────
+      # check_threshold.py:
+      #   - Reads the Run ID from model_info.txt
+      #   - Calls MLflow API to get the accuracy for that run
+      #   - If accuracy < 0.85 → exits with code 1 → FAILS this step
+      #   - If accuracy >= 0.85 → exits with code 0 → continues
+      #
+      # When this step FAILS, GitHub Actions stops the job here.
+      # The "Mock Build" step below will NOT run.
+      # This is how we "block" bad models from being deployed.
+      - name: "🚦 Check accuracy threshold (must be ≥ 0.85)"
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+        run: python check_threshold.py
+
+      # ── STEP 7: Mock Docker Build ────────────────────────────────
+      # In a real project, this would:
+      #   1. Log into Docker Hub with secrets
+      #   2. Run: docker build --build-arg RUN_ID=<id> -t myapp:latest .
+      #   3. Run: docker push myapp:latest
+      #
+      # Here we SIMULATE it with echo, because:
+      #   - We don't want to require a real Docker Hub account in the assignment
+      #   - The important logic (threshold check) is already proven above
+      #
+      # The echo command reads the Run ID from model_info.txt and prints it.
+      - name: "🐳 Mock Docker Build (Simulate Containerization)"
+        run: |
+          RUN_ID=$(cat model_info.txt)
+          echo "=============================================="
+          echo "Building Docker image for Run ID: $RUN_ID"
+          echo "docker build --build-arg RUN_ID=$RUN_ID -t ml-app:latest ."
+          echo "docker push myrepo/ml-app:latest"
+          echo "✅ Deployment successful for Run ID: $RUN_ID"
+          echo "=============================================="
+
+      # ── OPTIONAL STEP 8: Real Docker Build ──────────────────────
+      # Uncomment this block if you want to do a REAL Docker build.
+      # You'll need DOCKER_USERNAME and DOCKER_PASSWORD secrets set.
+      #
+      # - name: "🐳 Login to Docker Hub"
+      #   uses: docker/login-action@v3
+      #   with:
+      #     username: ${{ secrets.DOCKER_USERNAME }}
+      #     password: ${{ secrets.DOCKER_PASSWORD }}
+      #
+      # - name: "🔨 Build and Push Docker Image"
+      #   run: |
+      #     RUN_ID=$(cat model_info.txt)
+      #     docker build --build-arg RUN_ID=$RUN_ID \
+      #       -t ${{ secrets.DOCKER_USERNAME }}/ml-app:latest .
+      #     docker push ${{ secrets.DOCKER_USERNAME }}/ml-app:latest
