@@ -2,12 +2,17 @@
 train.py - Trains a classifier and logs everything to MLflow.
 After training, it saves the Run ID to model_info.txt so the
 deploy job can find this exact run later.
+
+Model selection is controlled by MODEL_VARIANT env var:
+- strong (default): RandomForest, typically passes threshold
+- weak: DummyClassifier, typically fails threshold
 """
 
 import os
 import mlflow
 import mlflow.sklearn
 from sklearn.datasets import load_iris
+from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
@@ -37,8 +42,18 @@ with mlflow.start_run() as run:
     print(f"MLflow Run ID: {run_id}")
 
     # Train
-    n_estimators = 100
-    model = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
+    model_variant = os.getenv("MODEL_VARIANT", "strong").strip().lower()
+    if model_variant == "weak":
+        model = DummyClassifier(strategy="most_frequent")
+        mlflow.log_param("model_variant", "weak")
+        mlflow.log_param("model_type", "DummyClassifier")
+    else:
+        n_estimators = 100
+        model = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
+        mlflow.log_param("model_variant", "strong")
+        mlflow.log_param("model_type", "RandomForestClassifier")
+        mlflow.log_param("n_estimators", n_estimators)
+
     model.fit(X_train, y_train)
 
     # Evaluate
@@ -47,7 +62,6 @@ with mlflow.start_run() as run:
     print(f"Accuracy: {accuracy:.4f}")
 
     # Log parameters and metrics to MLflow
-    mlflow.log_param("n_estimators", n_estimators)
     mlflow.log_param("test_size", 0.2)
     mlflow.log_metric("accuracy", accuracy)
 

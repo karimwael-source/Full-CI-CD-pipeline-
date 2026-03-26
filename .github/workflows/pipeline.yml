@@ -5,6 +5,16 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      model_variant:
+        description: "Training variant: strong should pass, weak should fail threshold"
+        required: true
+        default: "strong"
+        type: choice
+        options:
+          - strong
+          - weak
 
 jobs:
   validate:
@@ -31,6 +41,7 @@ jobs:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
           MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
           MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+          MODEL_VARIANT: ${{ github.event.inputs.model_variant || 'strong' }}
         run: python src/train.py
 
       - name: Verify model_info.txt exists
@@ -68,6 +79,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: model-info
+          path: .
 
       - name: Show received Run ID
         run: |
@@ -82,9 +94,4 @@ jobs:
 
       - name: Mock Docker Build
         run: |
-          RUN_ID=$(cat model_info.txt)
-          echo "=============================================="
-          echo "Building Docker image for Run ID: $RUN_ID"
-          echo "docker build --build-arg RUN_ID=$RUN_ID -t ml-app:latest ."
-          echo "Deployment successful for Run ID: $RUN_ID"
-          echo "=============================================="
+          echo "Building Docker image for Run ID: $(cat model_info.txt)"
